@@ -1,0 +1,269 @@
+dsi85 DSI-to-LVDS bridge driver
+###############################
+
+This driver integrates the TI SN65DSI85 DSI-to-LVDS converter into a
+DRM-based graphics setup.
+
+Author: Konrad Anton <konrad.anton@awinia.de>
+for Hella-Gutmann Solutions GmbH.
+
+Setup
+=====
+
+In order to use dsi85 in a project, copy the dsi85 tree to
+drivers/gpu/drm/bridge/dsi85 (the "dsi85" buildroot package does that)
+and set CONFIG_DSI85=y.
+
+The dsi85 driver implements a DRM Bridge which sits between a DSI
+output and a Panel. The Panel knows panel timings and how to switch
+the backlight. Usually, the panel-simple driver is a good choice.
+
+
+Configuration by DT
+-------------------
+
+Dsi85 needs three nodes in the Device Tree: the dsi85 node, the Panel
+node and the DSI node. As an I2C client, the dsi85 node wants to be
+nested in the node of the I2C bus::
+
+ i2c@12460000 {
+ 	//...
+
+	dsi85@2d {
+		compatible = "ti,dsi85"; /* instantiate the dsi85 driver */
+		reg = <0x2d>; /* i2c slave id */
+
+		dsi-lanes = <4>; /* tuning parameters -- see below */
+		lvds-channels = <2>;
+		sync-delay = <33>;
+		
+                ports {
+			#address-cells = <1>;
+		      	#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				dsi85_in: endpoint {
+			     		 remote-endpoint = <&dsi0_out>;
+				};		 		     
+			};			     
+
+			port@1 {
+				reg = <1>;
+				dsi85_out: endpoint {
+					  remote-endpoint = <&panel_in>;
+				};
+			};
+                };
+	};
+
+The dsi85 node must have exactly two ports. Port 0 points toward the
+DSI output, Port 1 toward the Panel. The DSI output needs a port wired
+to dsi85_in. In the Qualcomm MSM example::
+
+	dsi0: mdss_dsi@4700000 {
+		status = "okay";
+		vdda-supply = <&pm8921_l2>;/*VDD_MIPI1 to 4*/
+	      /* ... */
+
+		ports {
+			port@0 {
+                                reg = <0> ;
+				dsi0_in: endpoint {
+					remote-endpoint = <&mdp_dsi1_out>;
+				};
+			};
+
+			port@1 {
+                                reg = <1> ;
+				dsi0_out: endpoint {
+					remote-endpoint = <&dsi85_in>;
+					data-lanes = <0 1 2 3>;
+				};
+			};
+		};
+	};
+
+On the other side, the panel needs a port wired to dsi85_out::
+
+	dsi_lvds_panel: panel {
+		reg = <0>;
+		compatible = "nlt,192108AC18"; /* one of panel-simple's 
+			     		          match strings */
+
+		backlight = <&backlight>;
+
+		vddp-supply = <&pm8921_l17>;
+		iovcc-supply = <&pm8921_lvs7>;
+
+		enable-gpios = <&tlmm_pinmux 80 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm_pinmux 32 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-names	= "default";
+		pinctrl-0	= <&display_pins>;
+
+		port {
+        		panel_in: endpoint {
+				remote-endpoint = <&dsi85_out>;
+			};
+		};
+	};
+
+
+Tuning parameters
+-----------------
+
+Some of the configuration details of a DSI85 can be controlled by
+setting properties inside the dsi85 DT node. See DSI85 datasheet for
+more information.
+
+dsi-lanes = N
+  number of DSI lanes to use. Only tested with 4.
+
+lvds-channels = N
+  number of LVDS channels to use. (Only tested with 2).
+
+sync-delay = N
+  Additional delay to insert when translating a DSI HSync or VSync to
+  a LVDS Hsync or VSync. Becomes DSI85 registers CHA_SYNC_DELAY_LOW/HIGH,
+  see there. Default 0.
+
+de-neg-polarity = 0 or 1
+  default 0; when 1, set DE_NEG_POLARITY=1 in 0x18.7
+
+force-24bpp-mode = 0 or 1 
+  Default 0. Controls CHA_24BPP_MODE and
+  CHB_24BPP_MODE: If 1, force 24bpp; if 0, force 18bpp.
+
+force-24bpp-format1 = 0 or 1
+  Default 0. Controls CHA_24BPP_FORMAT1 and CHB_24BPP_FORMAT1, see there.
+
+lvds-vocm = 0..3
+  Default 0. Bit 1 controls CHA_LVDS_VOCM and Bit 0 controls CHB_LVDS_VOCM, see there. 
+  false means 1.2V, true means 0.9V.
+
+lvds-vod-swing-cha = 0..3
+  Default 0. Controls the CHA_LVDS_VOD_SWING field.
+
+lvds-vod-swing-chb = 0..3
+  Default 0. Controls the CHB_LVDS_VOD_SWING field.
+
+lvds-even-odd-swap = 0 or 1
+  Default 0. Controls EVEN_ODD_SWAP.
+
+lvds-reverse = 0..3
+  Default 0. Bit 0 controls CHB_REVERSE_LVDS, and Bit 1 controls CHA_REVERSE_LVDS.
+
+lvds-term = 0..3
+  Default 3. Bit 0 controls CHB_LVDS_TERM (true means termination on),
+  and Bit 1 controls CHA_LVDS_TERM. 
+
+lvds-cm-adjust-cha = 0..3
+  Default 0. Adjust common mode voltage for channel A, 0 means don't adjust. 
+  See CHA_LVDS_CM_ADJUST.
+
+lvds-cm-adjust-chb = 0..3
+  Default 0. Adjust common mode voltage for channel B, 0 means don't adjust. 
+  See CHB_LVDS_CM_ADJUST.
+
+
+Other parameters
+----------------
+
+The Panel will require a certain polarity of HSYNC and VSYNC
+signals. These are configured in the drm_display_mode instance of the
+panel-simple panel object, along with the display timings::
+
+ static const struct drm_display_mode nlt_192108AC18_mode = {
+	.clock = 74175 * 2,
+	.hdisplay = 960 * 2,
+	.hsync_start = (960 + 48) * 2,
+	.hsync_end = (960 + 48 + 44) * 2,
+	.htotal = (960 + 48 + 44 + 48) * 2,
+	.vdisplay = 1080,
+	.vsync_start = 1080 + 15,
+	.vsync_end = 1080 + 15 + 15,
+	.vtotal = 1080 + 15 + 15 + 15,
+	.vrefresh = 60,
+	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC,
+ };
+
+The flags bit DRM_MODE_FLAG_NVSYNC causes VS_NEG_POLARITY=1 in DSI85
+reg 0x18, i.e. VS is negative polarity driven 0 during corresponding
+sync. Analogously, DRM_MODE_FLAG_NHSYNC causes HS_NEG_POLARITY=1 in
+reg 0x18 for HSync. Default is VS_NEG_POLARITY=HS_NEG_POLARITY=0.
+
+
+
+Notes for dual-channel LVDS
+---------------------------
+
+The NL192108AC18 panel's datasheet requests a clock of 74MHz and a
+width of 960 double-pixel clocks. However, dsi85 expects the panel to
+contain pixel timings, i.e. 148MHz and 1920 pixels width, because then
+the DSI output can be configured directly from the panel parameters.
+
+
+
+Debug messages
+--------------
+
+The dsi85 driver uses the DRM logging facility which can be controlled
+by kernel parameter drm.debug=N, where N=0x3f enables all output.
+
+Especially errors in the Device Tree configuration can be discovered
+that way; grep for "dsi85".
+
+
+
+Design and Implementation
+=========================
+
+Implementation follows the example of other bridge drivers in the
+mainline kernel, especially nxp-ptn3460.
+
+The dsi85 driver is implemented as an I2C client driver whose probe
+method tries to locate panel and DSI drivers. Depending on
+circumstances, this will fail if some of the other drivers (e.g. the
+panel) are not yet ready. In that case, the probe callback uses the
+EPROBE_DEFER mechanism to request a retry. Otherwise, the probe
+callback installs the DRM bridge represented by sn65dsi85_bridge_funcs.
+
+The first bridge callback is the attach callback, which assembles a
+driver graph out of:
+
+- a DRM Connector, implemented using drm_connector_helper, that helps
+  choose display modes by delegating to the Panel.
+
+- the DRM Encoder supplied by the DRM framework
+
+- a DSI client device to configure DSI parameters (number of lanes...)
+
+The other callbacks deal with a proper sequence of initialization:
+
+- mode_fixup adjusts a display mode and decides whether it can be
+  activated. The dsi85 implementation does not attempt to validate
+  whether the timings are possible -- in the intended setting, the
+  panel does not change that often -- but it normalizes the
+  sync-polarity flags so that DSI always uses the same sync polarity,
+  regardless of the panel's choice.
+
+- mode_set is the place where the DSI85 register values are computed
+  according to the adjusted display mode and the DT settings, then
+  written to DSI85.
+
+- pre_enable tells the panel to power itself up
+
+- enable enables the DSI85 PLL and tells the panel to activate its backlight
+
+- disable undoes enable
+
+- post_disable undoes pre_enable
+
+
+Caveats
+-------
+
+The dsi85 driver has only been tested in a Qualcomm MSM kernel, and
+only with the panel NL192108AC18, dual-channel LVDS, four-lane DSI.
+

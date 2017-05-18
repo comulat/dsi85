@@ -1,11 +1,2 @@
-ifneq ($(KERNELRELEASE),)
-# kbuild part of makefile
-include Kbuild
-else
-# normal makefile
-KDIR ?= /lib/modules/`uname -r`/build
-
-default:
-	$(MAKE) -C $(KDIR) M=$$PWD
-
-endif
+obj-$(CONFIG_DRM_BRIDGE_DSI85) := dsi85.o
+dsi85-y := dsi85_main.o
